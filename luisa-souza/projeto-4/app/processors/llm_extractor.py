@@ -1,10 +1,8 @@
 """
-llm_extractor.py — Motor de Extração via LLM
+llm_extractor.py — Motor de Extração via LLM Multimodal
 
-Usa GitHub Models (gratuito) como primário:
-  - Endpoint: https://models.inference.ai.azure.com
-  - Modelo: gpt-4o-mini
-  - Autenticação: GitHub Personal Access Token
+Usa GitHub Models (gpt-4o-mini) com suporte a imagens.
+Envia texto + até 2 páginas como imagem (limite de tokens do free tier).
 """
 
 import json
@@ -25,8 +23,11 @@ from app.processors.prompt_builder import build_system_prompt, build_user_prompt
 logger = logging.getLogger(__name__)
 
 
-def _call_github_models(system_prompt: str, user_prompt: str) -> Optional[str]:
-    """Chama GitHub Models (gpt-4o-mini) — gratuito com token GitHub."""
+def _call_github_models(
+    system_prompt: str,
+    user_prompt: str,
+    page_images: list[str],
+) -> Optional[str]:
     try:
         from openai import OpenAI
 
@@ -34,17 +35,30 @@ def _call_github_models(system_prompt: str, user_prompt: str) -> Optional[str]:
             base_url="https://models.inference.ai.azure.com",
             api_key=settings.github_token,
         )
+
+        # Manda só as 2 primeiras páginas (onde fica a tabela de destaques)
+        content = [{"type": "text", "text": user_prompt}]
+        for i, img_b64 in enumerate(page_images[:2]):
+            content.append({
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/png;base64,{img_b64}",
+                    "detail": "low",  # low usa menos tokens
+                }
+            })
+            logger.debug(f"[LLM] Página {i+1} adicionada como imagem")
+
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
+                {"role": "user", "content": content},
             ],
             response_format={"type": "json_object"},
             temperature=0.0,
             max_tokens=2048,
         )
-        logger.info("[LLM] GitHub Models (gpt-4o-mini) respondeu com sucesso")
+        logger.info(f"[LLM] GitHub Models respondeu (texto + {min(2, len(page_images))} imagens)")
         return response.choices[0].message.content
 
     except Exception as e:
@@ -52,8 +66,12 @@ def _call_github_models(system_prompt: str, user_prompt: str) -> Optional[str]:
         return None
 
 
-def _call_llm(system_prompt: str, user_prompt: str) -> tuple[Optional[str], str]:
-    result = _call_github_models(system_prompt, user_prompt)
+def _call_llm(
+    system_prompt: str,
+    user_prompt: str,
+    page_images: list[str],
+) -> tuple[Optional[str], str]:
+    result = _call_github_models(system_prompt, user_prompt, page_images)
     if result:
         return result, "gpt-4o-mini (github-models)"
     return None, "none"
@@ -149,7 +167,9 @@ def extract_and_persist(
     system_prompt = build_system_prompt(empresa, ano, trimestre)
     user_prompt = build_user_prompt(document_text, empresa, ano, trimestre)
 
-    raw_json, model_name = _call_llm(system_prompt, user_prompt)
+    logger.info(f"[EXTRACTOR] Enviando texto + {min(2, len(parsed_doc.page_images))} imagens para o LLM")
+
+    raw_json, model_name = _call_llm(system_prompt, user_prompt, parsed_doc.page_images)
     if not raw_json:
         logger.error(f"[EXTRACTOR] LLM falhou para {empresa} {trimestre}T{ano}")
         return None
