@@ -1,14 +1,10 @@
 """
 llm_extractor.py — Motor de Extração via LLM
 
-Orquestra a chamada ao LLM (Gemini Flash com fallback OpenAI),
-valida a resposta com Pydantic e persiste no banco de dados.
-
-Fluxo:
-  1. Tenta Gemini Flash (gratuito, alta capacidade de contexto)
-  2. Fallback: GPT-4o-mini (se Gemini falhar ou não configurado)
-  3. Valida JSON com PreviaPeriodo Pydantic
-  4. Persiste no banco via SQLAlchemy
+Usa GitHub Models (gratuito) como primário:
+  - Endpoint: https://models.inference.ai.azure.com
+  - Modelo: gpt-4o-mini
+  - Autenticação: GitHub Personal Access Token
 """
 
 import json
@@ -29,38 +25,15 @@ from app.processors.prompt_builder import build_system_prompt, build_user_prompt
 logger = logging.getLogger(__name__)
 
 
-# ── Clientes LLM ─────────────────────────────────────────────────────────────
-
-def _call_gemini(system_prompt: str, user_prompt: str) -> Optional[str]:
-    """Chama a API do Google Gemini Flash e retorna o JSON extraído."""
-    try:
-        import google.generativeai as genai
-
-        genai.configure(api_key=settings.gemini_api_key)
-        model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash",
-            system_instruction=system_prompt,
-            generation_config={
-                "response_mime_type": "application/json",
-                "temperature": 0.0,  # determinístico para extração
-                "max_output_tokens": 2048,
-            }
-        )
-        response = model.generate_content(user_prompt)
-        logger.info("[LLM] Gemini Flash respondeu com sucesso")
-        return response.text
-
-    except Exception as e:
-        logger.warning(f"[LLM] Gemini falhou: {e}")
-        return None
-
-
-def _call_openai(system_prompt: str, user_prompt: str) -> Optional[str]:
-    """Chama a API da OpenAI (GPT-4o-mini) como fallback."""
+def _call_github_models(system_prompt: str, user_prompt: str) -> Optional[str]:
+    """Chama GitHub Models (gpt-4o-mini) — gratuito com token GitHub."""
     try:
         from openai import OpenAI
 
-        client = OpenAI(api_key=settings.openai_api_key)
+        client = OpenAI(
+            base_url="https://models.inference.ai.azure.com",
+            api_key=settings.github_token,
+        )
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
@@ -71,33 +44,20 @@ def _call_openai(system_prompt: str, user_prompt: str) -> Optional[str]:
             temperature=0.0,
             max_tokens=2048,
         )
-        logger.info("[LLM] GPT-4o-mini respondeu com sucesso")
+        logger.info("[LLM] GitHub Models (gpt-4o-mini) respondeu com sucesso")
         return response.choices[0].message.content
 
     except Exception as e:
-        logger.warning(f"[LLM] OpenAI falhou: {e}")
+        logger.warning(f"[LLM] GitHub Models falhou: {e}")
         return None
 
 
 def _call_llm(system_prompt: str, user_prompt: str) -> tuple[Optional[str], str]:
-    """
-    Tenta Gemini primeiro; se falhar, tenta OpenAI.
-    Retorna (json_string, model_name_used).
-    """
-    if settings.has_gemini:
-        result = _call_gemini(system_prompt, user_prompt)
-        if result:
-            return result, "gemini-1.5-flash"
-
-    if settings.has_openai:
-        result = _call_openai(system_prompt, user_prompt)
-        if result:
-            return result, "gpt-4o-mini"
-
+    result = _call_github_models(system_prompt, user_prompt)
+    if result:
+        return result, "gpt-4o-mini (github-models)"
     return None, "none"
 
-
-# ── Parser de resposta ────────────────────────────────────────────────────────
 
 def _parse_llm_response(
     raw_json: str,
@@ -109,58 +69,39 @@ def _parse_llm_response(
     model_name: str,
     pages_used: str,
 ) -> Optional[PreviaPeriodo]:
-    """
-    Valida e completa a resposta do LLM usando Pydantic.
-    Injeta metadados de linhagem que o LLM não preenche.
-    """
     try:
-        # Limpa markdown caso o modelo ignore a instrução de não usar
         cleaned = raw_json.strip()
         if cleaned.startswith("```"):
-            cleaned = "\n".join(cleaned.split("\n")[1:-1])
+            lines = cleaned.split("\n")
+            cleaned = "\n".join(lines[1:-1]) if len(lines) > 2 else cleaned
 
         data = json.loads(cleaned)
-
-        # Injeta metadados de linhagem (não devem vir do LLM)
         data["fonte_url"] = fonte_url
         data["pdf_hash_sha256"] = pdf_hash
         data["llm_model_usado"] = model_name
         data["data_extracao"] = datetime.utcnow().isoformat()
         data["paginas_utilizadas"] = pages_used
-
-        # Garante que empresa/ano/trimestre sejam os esperados
-        # (o LLM pode identificar diferente — usamos o que coletamos)
         data.setdefault("empresa", empresa)
         data.setdefault("ano", ano)
         data.setdefault("trimestre", trimestre)
 
         previa = PreviaPeriodo(**data)
-        logger.info(
-            f"[EXTRACTOR] Extração validada: {previa.empresa} "
-            f"{previa.trimestre}T{previa.ano} "
-            f"[confiança: {previa.confianca_extracao}]"
-        )
+        logger.info(f"[EXTRACTOR] Validado: {previa.empresa} {previa.trimestre}T{previa.ano} [confiança: {previa.confianca_extracao}]")
         return previa
 
     except json.JSONDecodeError as e:
-        logger.error(f"[EXTRACTOR] JSON inválido do LLM: {e}")
-        logger.debug(f"[EXTRACTOR] Resposta bruta: {raw_json[:500]}")
+        logger.error(f"[EXTRACTOR] JSON inválido: {e}")
         return None
     except ValidationError as e:
         logger.error(f"[EXTRACTOR] Validação Pydantic falhou: {e}")
         return None
 
 
-# ── Persistência ──────────────────────────────────────────────────────────────
-
 def _persist_previa(previa: PreviaPeriodo) -> bool:
-    """Salva os dados extraídos no banco de dados."""
     try:
         with Session(engine) as session:
             orm = PreviaORM(
-                empresa=previa.empresa,
-                ano=previa.ano,
-                trimestre=previa.trimestre,
+                empresa=previa.empresa, ano=previa.ano, trimestre=previa.trimestre,
                 lancamentos_unidades=previa.lancamentos_unidades,
                 lancamentos_vgv_milhoes=previa.lancamentos_vgv_milhoes,
                 vendas_liquidas_unidades=previa.vendas_liquidas_unidades,
@@ -181,17 +122,14 @@ def _persist_previa(previa: PreviaPeriodo) -> bool:
                 confianca_extracao=previa.confianca_extracao,
                 paginas_utilizadas=previa.paginas_utilizadas,
             )
-            session.merge(orm)  # merge evita duplicatas pela constraint única
+            session.merge(orm)
             session.commit()
             logger.info(f"[DB] Persistido: {previa.empresa} {previa.trimestre}T{previa.ano}")
             return True
-
     except Exception as e:
         logger.error(f"[DB] Falha ao persistir: {e}")
         return False
 
-
-# ── Função Principal ──────────────────────────────────────────────────────────
 
 def extract_and_persist(
     pdf_path: Path,
@@ -202,58 +140,27 @@ def extract_and_persist(
     fonte_url: str,
     pdf_hash: str,
 ) -> Optional[PreviaPeriodo]:
-    """
-    Pipeline completo de extração:
-    1. Monta prompts
-    2. Chama LLM (Gemini → OpenAI fallback)
-    3. Valida com Pydantic
-    4. Persiste no banco
+    logger.info(f"[EXTRACTOR] Iniciando: {empresa} {trimestre}T{ano}")
 
-    Returns:
-        PreviaPeriodo se sucesso, None se falhou
-    """
-    logger.info(f"[EXTRACTOR] Iniciando extração: {empresa} {trimestre}T{ano}")
-
-    # ── 1. Prepara texto para o LLM ──────────────────────────────────────────
     document_text = get_text_for_llm(parsed_doc)
-
-    # Limita tamanho para não explodir contexto (aprox 100k chars = ~25k tokens)
     if len(document_text) > 100_000:
-        logger.warning(f"[EXTRACTOR] Texto muito longo ({len(document_text)} chars) — truncando")
         document_text = document_text[:100_000] + "\n\n[DOCUMENTO TRUNCADO]"
 
-    # ── 2. Monta prompts ─────────────────────────────────────────────────────
     system_prompt = build_system_prompt(empresa, ano, trimestre)
     user_prompt = build_user_prompt(document_text, empresa, ano, trimestre)
 
-    logger.info(
-        f"[EXTRACTOR] Estratégia: {parsed_doc.strategy} | "
-        f"~{parsed_doc.estimated_tokens} tokens estimados | "
-        f"{len(parsed_doc.chunks)} chunk(s)"
-    )
-
-    # ── 3. Chama o LLM ───────────────────────────────────────────────────────
     raw_json, model_name = _call_llm(system_prompt, user_prompt)
-
     if not raw_json:
-        logger.error(f"[EXTRACTOR] Todos os LLMs falharam para {empresa} {trimestre}T{ano}")
+        logger.error(f"[EXTRACTOR] LLM falhou para {empresa} {trimestre}T{ano}")
         return None
 
-    # ── 4. Valida e completa ─────────────────────────────────────────────────
     previa = _parse_llm_response(
-        raw_json=raw_json,
-        empresa=empresa,
-        ano=ano,
-        trimestre=trimestre,
-        fonte_url=fonte_url,
-        pdf_hash=pdf_hash,
-        model_name=model_name,
+        raw_json=raw_json, empresa=empresa, ano=ano, trimestre=trimestre,
+        fonte_url=fonte_url, pdf_hash=pdf_hash, model_name=model_name,
         pages_used=parsed_doc.pages_used,
     )
-
     if not previa:
         return None
 
-    # ── 5. Persiste ──────────────────────────────────────────────────────────
     success = _persist_previa(previa)
     return previa if success else None

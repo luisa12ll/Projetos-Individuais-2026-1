@@ -1,0 +1,39 @@
+{
+  "pipeline_run": {
+    "timestamp_utc": "2026-06-08T02:52:40.399957",
+    "pdf_fonte": "exemplo_Boletim_Conjuntura_2025_3T.pdf",
+    "pdf_sha256": "e53f30f5f67ebc739041680133ef33bedc87446cba7bb41ee9fbb0c4f3e65661",
+    "fonte_url": "https://github.com/unb-Sistemas-de-Machine-learning/Projetos-Individuais-2026-1/blob/main/projeto-individual-4/exemplo_Boletim_Conjuntura_2025_3T.pdf",
+    "llm_model": "gpt-4o-mini (github-models)",
+    "estrategia_chunking": "full_scan",
+    "paginas_processadas": "1-1",
+    "tokens_estimados": 872
+  },
+  "dados_extraidos": {
+    "empresa": "BOLETIM_CONJUNTURA",
+    "ano": 2025,
+    "trimestre": 3,
+    "periodo": "3T2025",
+    "lancamentos_unidades": null,
+    "lancamentos_vgv_milhoes": null,
+    "vendas_liquidas_unidades": null,
+    "vendas_liquidas_vgv_milhoes": null,
+    "vendas_brutas_unidades": null,
+    "vendas_brutas_vgv_milhoes": null,
+    "distratos_unidades": null,
+    "distratos_vgv_milhoes": null,
+    "estoque_unidades": null,
+    "estoque_vgv_milhoes": null,
+    "entregas_unidades": null,
+    "entregas_vgv_milhoes": null,
+    "vsv_percentual": null,
+    "confianca_extracao": null
+  },
+  "linhagem": {
+    "fonte_url": "https://github.com/unb-Sistemas-de-Machine-learning/Projetos-Individuais-2026-1/blob/main/projeto-individual-4/exemplo_Boletim_Conjuntura_2025_3T.pdf",
+    "pdf_hash_sha256": "e53f30f5f67ebc739041680133ef33bedc87446cba7bb41ee9fbb0c4f3e65661",
+    "llm_model_usado": "gpt-4o-mini (github-models)",
+    "data_extracao": "2026-06-08 02:52:40.399480",
+    "paginas_utilizadas": "1-1"
+  }
+}
