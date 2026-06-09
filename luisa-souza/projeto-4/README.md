@@ -1,230 +1,150 @@
-# Pipeline UDA — Análise de Dados Habitacionais
+<H1> Projeto Individual 4 — Pipeline UDA de Prévias Operacionais com LLM </H1>
 
-> **Projeto 4 — Sistemas de Machine Learning | UnB 2026/1**
->
-> Pipeline de Engenharia e Análise de Dados Não Estruturados (UDA) focado no setor corporativo habitacional brasileiro, desenvolvido para alimentar o **Boletim de Conjuntura do Setor Habitacional** do Ministério das Cidades.
-
----
-
-## Visão Geral da Arquitetura
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    CAMADA DE COLETA                             │
-│  APScheduler (1×/dia 08:00 BRT)                                 │
-│  Scrapers: MRV · Direcional · Cury                              │
-│  ↓ Hash SHA-256 → verifica Catálogo → evita duplicatas          │
-│  ↓ Download PDF → armazenamento local organizado                │
-└─────────────────────────────────┬───────────────────────────────┘
-                                  │
-┌─────────────────────────────────▼───────────────────────────────┐
-│              CAMADA UDA — PROCESSAMENTO LLM                     │
-│  PyMuPDF → Chunking Semântico Adaptativo                        │
-│  ↓ Contrato Semântico (Pydantic + JSON Schema)                  │
-│  ↓ Google Gemini Flash (fallback: GPT-4o-mini)                  │
-│  ↓ Validação → SQLite                                           │
-└─────────────────────────────────┬───────────────────────────────┘
-                                  │
-┌─────────────────────────────────▼───────────────────────────────┐
-│              CAMADA DE SERVIÇO (FastAPI)                        │
-│  GET /api/conjuntura?empresa=MRV&ano=2025&trimestre=3           │
-│  GET /api/empresas · /api/catalogo · /api/health                │
-│  POST /api/processar · POST /api/coletar                        │
-└─────────────────────────────────────────────────────────────────┘
-```
+<p align="center">
+  <img src="https://img.shields.io/badge/Status-Concluído-green?style=flat-square" alt="Status">
+  <img src="https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/FastAPI-0.111-009688?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI">
+  <img src="https://img.shields.io/badge/LLM-GPT--4o--mini-412991?style=flat-square&logo=openai&logoColor=white" alt="LLM">
+  <img src="https://img.shields.io/badge/Parser-Docling-FF6B35?style=flat-square" alt="Docling">
+  <img src="https://img.shields.io/badge/Playwright-Fallback_JS-2EAD33?style=flat-square&logo=playwright&logoColor=white" alt="Playwright">
+  <img src="https://img.shields.io/badge/Testes-45_casos-success?style=flat-square&logo=pytest&logoColor=white" alt="Testes">
+</p>
 
 ---
 
-## Decisões Técnicas
+## Descrição
 
-### Estratégia de Chunking: Híbrida Adaptativa
-
-| Condição | Estratégia | Justificativa |
-|---|---|---|
-| ≤ 20 páginas | **Full-Scan** | Prévias operacionais típicas têm 5-15 páginas; enviar tudo maximiza contexto e precisão |
-| > 20 páginas | **Chunking Semântico** | Releases extensos: detecta headings, filtra chunks com palavras-chave operacionais, reduz custo de tokens |
-| Fallback | **Full-Scan (truncado)** | Se nenhum chunk passar no filtro semântico, envia o documento até o limite de contexto |
-
-### Motor de Extração: Nativo
-
-- **PyMuPDF (fitz)** — parsing robusto de texto, estrutura de linhas, sem dependência de SaaS
-- **Google Gemini Flash** — LLM primário (free tier generoso, alta janela de contexto)
-- **OpenAI GPT-4o-mini** — fallback automático em caso de falha do Gemini
-
-### Gatilho de Ingestão: Polling com CronJob
-
-- **APScheduler** com timezone America/Sao_Paulo (BRT)
-- Frequência: 1× por dia às 08:00 (configurável via `.env`)
-- Rate limiting: mínimo de 30 segundos entre requests ao mesmo domínio
-
-### Idempotência via SHA-256
-
-```python
-# Antes de qualquer chamada LLM:
-pdf_hash = sha256(conteudo_binario_do_pdf)
-if hash_ja_existe_no_catalogo(pdf_hash):
-    ignorar()  # Zero custo de API
-```
+O ***Pipeline UDA*** é um sistema de extração automática de métricas operacionais de prévias de resultados de incorporadoras brasileiras. O pipeline coleta PDFs publicados nos portais de Relações com Investidores, extrai dados estruturados usando LLM multimodal e os expõe via API REST transformando documentos não estruturados em dados prontos para análise.
 
 ---
 
-## Contrato Semântico
+## Camadas Implementadas
 
-O `PreviaPeriodo` (Pydantic) é o núcleo de validação:
-
-```python
-class PreviaPeriodo(BaseModel):
-    empresa: str                              # "MRV", "DIRECIONAL", "CURY"
-    ano: int                                  # 2025
-    trimestre: int                            # 1-4
-
-    lancamentos_unidades: Optional[int]       # Valor absoluto (nunca %)
-    lancamentos_vgv_milhoes: Optional[float]  # R$ milhões (nunca reais)
-    vendas_liquidas_unidades: Optional[int]
-    vendas_liquidas_vgv_milhoes: Optional[float]
-    # ... demais métricas
-
-    # Linhagem completa
-    fonte_url: str            # URL pública do PDF
-    pdf_hash_sha256: str      # SHA-256 do binário
-    llm_model_usado: str      # ex: "gemini-1.5-flash"
-    confianca_extracao: str   # "alta" | "media" | "baixa"
-```
-
-**Regras de blindagem contra alucinação:**
-- Campos ausentes → `null` (nunca inventar valores)
-- VGV sempre em R$ milhões (sanitização automática se LLM retornar em reais/bilhões)
-- Empresa sempre em maiúsculas
-- Trimestre validado entre 1 e 4
+| Camada | Descrição | Status |
+|--------|-----------|--------|
+| A | Coleta automática com polling diário (APScheduler 08:00 BRT) | ✅ |
+| A | Idempotência por SHA-256 nunca reprocessa o mesmo documento | ✅ |
+| A | Rate limiting (30s/domínio) e retry exponencial com tenacity | ✅ |
+| A | Playwright como fallback automático para portais SPA/JavaScript | ✅ |
+| A | Collectors para MRV, Cury e Direcional | ✅ |
+| B | Docling como parser primário, lê tabelas rotacionadas e embaralhadas | ✅ |
+| B | pdfplumber como fallback + PyMuPDF para imagens | ✅ |
+| B | Estratégia adaptativa: full-scan (≤20 pág.) ou chunking semântico (>20 pág.) | ✅ |
+| B | LLM multimodal (gpt-4o-mini) processa texto e imagens das páginas | ✅ |
+| B | Contrato semântico Pydantic com anti-alucinação (null para campos ausentes) | ✅ |
+| B | Sanitização automática de VGV (bilhões → milhões) | ✅ |
+| C | API REST com filtros por empresa, ano e trimestre | ✅ |
+| C | Catálogo com SHA-256, URL original, modelo LLM e timestamp | ✅ |
+| — | 45 casos de teste com banco em memória e mocks de LLM | ✅ |
 
 ---
 
-## Instalação e Configuração
+## Destaques Técnicos
 
-### Pré-requisitos
+O projeto exercita conceitos modernos de Engenharia de Dados e LLM Engineering:
 
-- **Python 3.11 ou 3.12** (obrigatório — Python 3.13/3.14 ainda não tem wheels para todas as dependências)
-- Pelo menos uma chave de API: Google Gemini **ou** OpenAI
+- ***Docling como motor de parsing:*** Converte PDFs em Markdown estruturado usando modelos de ML, resolvendo o problema de tabelas rotacionadas (como as da MRV que o pdfplumber não consegue ler);
+- ***LLM Multimodal Adaptativo:*** Envia texto + imagens das páginas ao gpt-4o-mini via GitHub Models (gratuito). A estratégia muda conforme a qualidade do texto extraído, texto legível usa full-text + imagens de apoio; texto embaralhado usa só imagens em alta resolução;
+- ***Playwright como fallback:*** Portais de RI que renderizam via JavaScript (SPA/React) não são acessíveis pelo BeautifulSoup. O Playwright ativa automaticamente quando nenhum PDF é encontrado no HTML estático; e
+- ***Contrato semântico com Pydantic:*** O schema `PreviaPeriodo` valida cada campo extraído, rejeita alucinações e força null para dados ausentes, nunca inventa valores.
 
-> **Mac com homebrew:** `brew install python@3.11`
+---
 
-### 1. Criar ambiente virtual e instalar dependências
+## Evidências de Extração
+
+Valores validados manualmente contra os PDFs originais:
+
+| Empresa | Período | Lançamentos (un) | Lançamentos (R$ MM) | Vendas Líq. (un) | Vendas Líq. (R$ MM) | Confiança |
+|---------|---------|-----------------|---------------------|-----------------|---------------------|-----------|
+| MRV | 1T26 | 10.386 | 2.915 | 9.141 | 2.469 | alta |
+| Cury | 1T26 | 8.001 | 2.646,8 | 7.786 | 2.304,6 | alta |
+| Direcional | 1T26 | 3.109 | 1.005,8 | 4.848 | 1.582,0 | alta |
+
+---
+
+## Pré-requisitos
+
+Antes de executar o projeto, certifique-se de ter instalado:
+
+**1. Python 3.11**
 
 ```bash
-cd projeto-4/
-python3.11 -m venv .venv
-source .venv/bin/activate   # Linux/Mac
-# .venv\Scripts\activate    # Windows
-
-pip install -r requirements.txt
+python3.11 --version
 ```
 
-### 2. Configurar variáveis de ambiente
+**2. GitHub Personal Access Token com permissão Models**
+
+Acesse [github.com/settings/personal-access-tokens](https://github.com/settings/personal-access-tokens/new), crie um token com permissão **Models: Read** e guarde-o.
+
+---
+
+## Instalação
+
+**1. Clone o repositório:**
+
+```bash
+git clone https://github.com/luisa12ll/Projetos-Individuais-2026-1.git
+cd Projetos-Individuais-2026-1/luisa-souza/projeto-4
+```
+
+**2. Crie o ambiente virtual e instale as dependências:**
+
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+playwright install chromium
+```
+
+**3. Configure as variáveis de ambiente:**
 
 ```bash
 cp .env.example .env
-# Edite o .env com suas chaves de API:
+# Edite o .env e adicione seu GITHUB_TOKEN
 ```
 
-```dotenv
-GEMINI_API_KEY=sua_chave_gemini_aqui
-# OPENAI_API_KEY=opcional_fallback
-```
+O arquivo `.env` deve conter:
 
-**Como obter a chave Gemini (gratuita):**
-1. Acesse [aistudio.google.com](https://aistudio.google.com)
-2. Clique em "Get API Key"
-3. Cole no `.env`
+```env
+GITHUB_TOKEN=github_pat_...
+```
 
 ---
 
-## Execução
-
-### Iniciar o servidor da API
+## Processando um PDF por URL
 
 ```bash
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-```
-
-Acesse a documentação interativa: **http://localhost:8000/docs**
-
-### Processar o Boletim de Exemplo (PDF do enunciado)
-
-```bash
-# Processar PDF local
 python process_example.py \
-  --pdf exemplo_Boletim_Conjuntura_2025_3T.pdf \
-  --empresa EXEMPLO \
-  --ano 2025 \
-  --trimestre 3
-
-# Processar PDF por URL
-python process_example.py \
-  --url https://ri.mrv.com.br/.../previa_3t25.pdf \
+  --url 'https://api.mziq.com/mzfilemanager/v2/d/...' \
   --empresa MRV \
-  --ano 2025 \
-  --trimestre 3
-```
-
-### Disparar coleta manual via API
-
-```bash
-# Inicia coleta de todos os portais de RI
-curl -X POST http://localhost:8000/api/coletar
-
-# Processar um PDF específico
-curl -X POST http://localhost:8000/api/processar \
-  -H "Content-Type: application/json" \
-  -d '{
-    "url": "https://ri.mrv.com.br/.../previa_3t25.pdf",
-    "empresa": "MRV",
-    "ano": 2025,
-    "trimestre": 3
-  }'
+  --ano 2026 \
+  --trimestre 1
 ```
 
 ---
 
-## Endpoints da API
-
-| Método | Endpoint | Descrição |
-|---|---|---|
-| `GET` | `/api/health` | Status do serviço e scheduler |
-| `GET` | `/api/empresas` | Empresas monitoradas com totais |
-| `GET` | `/api/conjuntura` | Consulta com filtros (`empresa`, `ano`, `trimestre`) |
-| `GET` | `/api/conjuntura/{empresa}` | Histórico completo de uma empresa |
-| `GET` | `/api/catalogo` | Catálogo de documentos com linhagem |
-| `POST` | `/api/processar` | Processa PDF por URL (dev/debug) |
-| `POST` | `/api/coletar` | Dispara coleta manual imediata |
-
-### Exemplos de consulta
+## Subindo a API
 
 ```bash
-# Dados da MRV no 3T25
-curl "http://localhost:8000/api/conjuntura?empresa=MRV&ano=2025&trimestre=3"
+uvicorn app.main:app --reload
+```
 
-# Histórico completo da Direcional
-curl "http://localhost:8000/api/conjuntura/DIRECIONAL"
+Acesse os endpoints:
 
-# Todos os dados de 2025
-curl "http://localhost:8000/api/conjuntura?ano=2025"
-
-# Linhagem de documentos
-curl "http://localhost:8000/api/catalogo"
+```
+GET http://localhost:8000/api/conjuntura?empresa=MRV&ano=2026&trimestre=1
+GET http://localhost:8000/api/empresas
+GET http://localhost:8000/api/catalogo
+GET http://localhost:8000/health
 ```
 
 ---
 
-## Testes
+## Rodando os Testes
 
 ```bash
 pytest tests/ -v
 ```
-
-Cobertura dos testes:
-- `test_pdf_parser.py` — Parsing de PDFs reais, estratégias full-scan/chunking, detecção de conteúdo
-- `test_llm_extractor.py` — Validação Pydantic, anti-alucinação, sanitização de valores, tratamento de erros
-- `test_api.py` — Todos os endpoints REST com banco em memória
 
 ---
 
@@ -232,86 +152,48 @@ Cobertura dos testes:
 
 ```
 projeto-4/
-├── README.md
-├── requirements.txt
-├── .env.example
-├── process_example.py          # Script CLI para testes manuais
-│
 ├── app/
-│   ├── main.py                 # FastAPI + scheduler startup
-│   ├── config.py               # Pydantic Settings (.env)
-│   │
-│   ├── models/
-│   │   ├── schema.py           # Contratos Pydantic (PreviaPeriodo)
-│   │   └── database.py         # SQLAlchemy ORM + SQLite
-│   │
+│   ├── api/                      # FastAPI endpoints
 │   ├── collectors/
-│   │   ├── base_collector.py   # Classe abstrata + rate limiting
-│   │   ├── catalog.py          # Catálogo SHA-256 + lineage
-│   │   ├── mrv_collector.py    # Scraper ri.mrv.com.br
+│   │   ├── base_collector.py     # Base com Playwright fallback
+│   │   ├── mrv_collector.py
 │   │   ├── direcional_collector.py
-│   │   └── cury_collector.py   # Scraper ri.cury.net
-│   │
+│   │   └── cury_collector.py
+│   ├── models/                   # ORM SQLAlchemy e schemas Pydantic
 │   ├── processors/
-│   │   ├── pdf_parser.py       # PyMuPDF + chunking adaptativo
-│   │   ├── prompt_builder.py   # System prompt + JSON Schema
-│   │   └── llm_extractor.py    # Gemini/OpenAI + validação Pydantic
-│   │
-│   ├── scheduler/
-│   │   └── jobs.py             # APScheduler: coleta diária 08:00 BRT
-│   │
-│   └── api/
-│       ├── schemas.py          # Schemas de resposta da API
-│       └── routes.py           # FastAPI endpoints
-│
-├── data/
-│   ├── pdfs/                   # PDFs organizados por empresa/ano/trimestre
-│   └── catalog.db              # SQLite (criado automaticamente)
-│
-└── tests/
-    ├── conftest.py
-    ├── test_pdf_parser.py
-    ├── test_llm_extractor.py
-    └── test_api.py
+│   │   ├── pdf_parser.py         # Docling + pdfplumber + PyMuPDF
+│   │   ├── llm_extractor.py      # GitHub Models multimodal adaptativo
+│   │   └── prompt_builder.py     # System e user prompts
+│   └── config.py
+├── tests/                        # 45 casos de teste
+├── generate_example_output.py    # Evidência de execução
+├── process_example.py            # Processamento por URL
+├── exemplo_output.json           # Evidência commitada
+├── requirements.txt
+└── .env.example
 ```
 
 ---
 
-## Empresas Monitoradas
+## Tecnologias Utilizadas
 
-| Empresa | Portal de RI | Documentos Alvo |
-|---|---|---|
-| MRV | [ri.mrv.com.br](https://ri.mrv.com.br) | Prévia Operacional Trimestral |
-| Direcional | [ri.direcional.com.br](https://ri.direcional.com.br) | Prévia Operacional Trimestral |
-| Cury | [ri.cury.net](https://ri.cury.net) | Prévia Operacional Trimestral |
-
-Para adicionar novas empresas, crie uma subclasse de `BaseCollector` em `app/collectors/` e adicione ao `ALL_COLLECTORS` em `app/collectors/__init__.py`.
-
----
-
-## Catálogo de Dados e Linhagem
-
-Cada registro no banco contém rastreabilidade completa:
-
-```json
-{
-  "empresa": "MRV",
-  "periodo": "3T2025",
-  "vendas_liquidas_vgv_milhoes": 2300.0,
-  "fonte_url": "https://ri.mrv.com.br/central-resultados/previa_3t25.pdf",
-  "pdf_hash_sha256": "a3f8c2...",
-  "data_extracao": "2025-10-15T08:00:00",
-  "llm_model_usado": "gemini-1.5-flash",
-  "confianca_extracao": "alta"
-}
-```
+- ***Parser:*** Docling, pdfplumber, PyMuPDF;
+- ***LLM:*** GitHub Models (gpt-4o-mini) via OpenAI SDK;
+- ***API:*** FastAPI, Uvicorn;
+- ***Banco:*** SQLite + SQLAlchemy;
+- ***Coleta:*** httpx, BeautifulSoup, Playwright;
+- ***Validação:*** Pydantic v2;
+- ***Scheduler:*** APScheduler; e
+- ***Testes:*** pytest (45 casos).
 
 ---
 
-## Referências Técnicas
+## Autora
 
-- [PyMuPDF Documentation](https://pymupdf.readthedocs.io/)
-- [Pydantic v2 Docs](https://docs.pydantic.dev/latest/)
-- [FastAPI Docs](https://fastapi.tiangolo.com/)
-- [APScheduler Docs](https://apscheduler.readthedocs.io/)
-- [Google Gemini API](https://ai.google.dev/)
+<div align="center"><table>
+  <tr>
+    <td align="center"><a href="https://github.com/luisa12ll"><img src="https://avatars.githubusercontent.com/luisa12ll" width="100px" style="border-radius: 50%;"><br/>Luísa de Souza — 232014807</a></td>
+  </tr>
+</table></div>
+
+---
