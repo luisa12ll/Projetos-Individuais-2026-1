@@ -174,4 +174,15 @@ def build_user_prompt(document_text: str, empresa: str, ano: int, trimestre: int
 ---
 
 Extraia as métricas operacionais deste documento e retorne o JSON conforme o schema especificado.
-Lembre-se: valores ausentes → null. Nunca invente dados."""
+Lembre-se: valores ausentes → null. Nunca invente dados.
+ATENÇÃO 1: Se a tabela tiver múltiplas linhas (ex: MRV, Sensia, Total Incorporação; ou Direcional, Riva, Total),
+extraia SEMPRE os valores da linha TOTAL ou TOTAL INCORPORAÇÃO, nunca de linhas individuais.
+ATENÇÃO 2: Se a tabela tiver múltiplas colunas de períodos (ex: 1T26, 4T25, 1T25), extraia SEMPRE os valores da coluna do PERÍODO MAIS RECENTE da tabela, que é o período do relatório.
+ATENÇÃO 3: IGNORE completamente valores de geração de caixa, venda de ativos, Resia, Urba, Luggo ou operações nos EUA. Extraia APENAS métricas operacionais de LANÇAMENTOS e VENDAS de imóveis no Brasil (unidades e VGV).
+ATENÇÃO 4: Os dados corretos estão nas IMAGENS anexadas, não no texto. Priorize as imagens para extrair os valores da tabela INDICADORES OPERACIONAIS."""
+
+# Instrução adicional injetada no user prompt para empresas com múltiplas linhas
+MULTI_LINE_INSTRUCTION = """
+ATENÇÃO ESPECIAL: Se a tabela tiver múltiplas linhas (ex: MRV, Sensia, Total Incorporação),
+extraia SEMPRE os valores da linha TOTAL ou TOTAL INCORPORAÇÃO, nunca de linhas individuais.
+"""

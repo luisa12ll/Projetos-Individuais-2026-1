@@ -2,7 +2,9 @@
 llm_extractor.py — Motor de Extração via LLM Multimodal
 
 Usa GitHub Models (gpt-4o-mini) com suporte a imagens.
-Envia texto + até 2 páginas como imagem (limite de tokens do free tier).
+Estratégia adaptativa:
+  - PDF com texto legível (>2000 tokens): usa texto + 2 imagens iniciais
+  - PDF com texto ruim/embaralhado (<2000 tokens): usa só imagens do meio do doc
 """
 
 import json
@@ -27,26 +29,53 @@ def _call_github_models(
     system_prompt: str,
     user_prompt: str,
     page_images: list[str],
+    doc_tokens: int = 0,
+    empresa_hint: str = '',
 ) -> Optional[str]:
     try:
         from openai import OpenAI
-
         client = OpenAI(
             base_url="https://models.inference.ai.azure.com",
             api_key=settings.github_token,
         )
+        total = len(page_images)
+        has_good_text = doc_tokens > 2000
 
-        # Manda só as 2 primeiras páginas (onde fica a tabela de destaques)
-        content = [{"type": "text", "text": user_prompt}]
-        for i, img_b64 in enumerate(page_images[:2]):
+        if not has_good_text:
+            # PDF com texto ruim (slides/rotacionado): usa só imagens do meio
+            prompt_text = (
+                f"Analise as imagens do PDF de prévia operacional da empresa {empresa_hint}. "
+                f"O período do relatório é {empresa_hint} - busque a coluna '1T26' ou o período mais à esquerda da tabela. "
+                "Extraia os dados da tabela INDICADORES OPERACIONAIS - LANÇAMENTOS e VENDAS LÍQUIDAS. "
+                "Retorne JSON com: lancamentos_unidades, lancamentos_vgv_milhoes, "
+                "vendas_liquidas_unidades, vendas_liquidas_vgv_milhoes, "
+                "vendas_brutas_unidades, vendas_brutas_vgv_milhoes, "
+                "distratos_unidades, distratos_vgv_milhoes, estoque_unidades, estoque_vgv_milhoes, "
+                "entregas_unidades, entregas_vgv_milhoes, vsv_percentual, confianca_extracao. "
+                "IMPORTANTE: Use a linha TOTAL INCORPORAÇÃO. "
+                "A coluna correta é a PRIMEIRA coluna de dados (mais à esquerda), não as colunas de comparação. "
+                "Os valores devem ser na casa dos MILHARES de unidades e MILHÕES de reais. "
+                "Campos ausentes = null."
+            )
+            # Manda só a página do meio com alta resolução para leitura precisa da tabela
+            mid = int(total * 0.50)
+            selected_indices = [mid]
+        else:
+            # PDF com texto legível: usa texto + 2 primeiras páginas
+            prompt_text = user_prompt
+            selected_indices = list(range(min(2, total)))
+
+        content = [{"type": "text", "text": prompt_text}]
+        for idx in selected_indices:
             content.append({
                 "type": "image_url",
                 "image_url": {
-                    "url": f"data:image/png;base64,{img_b64}",
-                    "detail": "low",  # low usa menos tokens
+                    "url": f"data:image/png;base64,{page_images[idx]}",
+                    "detail": "high" if not has_good_text else "low",
                 }
             })
-            logger.debug(f"[LLM] Página {i+1} adicionada como imagem")
+
+        logger.info(f"[LLM] Enviando páginas {[i+1 for i in selected_indices]} de {total} (texto_ok={has_good_text})")
 
         response = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -58,7 +87,7 @@ def _call_github_models(
             temperature=0.0,
             max_tokens=2048,
         )
-        logger.info(f"[LLM] GitHub Models respondeu (texto + {min(2, len(page_images))} imagens)")
+        logger.info(f"[LLM] GitHub Models respondeu ({len(selected_indices)} imagens, texto_ok={has_good_text})")
         return response.choices[0].message.content
 
     except Exception as e:
@@ -70,8 +99,10 @@ def _call_llm(
     system_prompt: str,
     user_prompt: str,
     page_images: list[str],
+    doc_tokens: int = 0,
+    empresa_hint: str = '',
 ) -> tuple[Optional[str], str]:
-    result = _call_github_models(system_prompt, user_prompt, page_images)
+    result = _call_github_models(system_prompt, user_prompt, page_images, doc_tokens, empresa_hint)
     if result:
         return result, "gpt-4o-mini (github-models)"
     return None, "none"
@@ -167,9 +198,13 @@ def extract_and_persist(
     system_prompt = build_system_prompt(empresa, ano, trimestre)
     user_prompt = build_user_prompt(document_text, empresa, ano, trimestre)
 
-    logger.info(f"[EXTRACTOR] Enviando texto + {min(2, len(parsed_doc.page_images))} imagens para o LLM")
+    raw_json, model_name = _call_llm(
+        system_prompt, user_prompt,
+        parsed_doc.page_images,
+        parsed_doc.estimated_tokens,
+        empresa
+    )
 
-    raw_json, model_name = _call_llm(system_prompt, user_prompt, parsed_doc.page_images)
     if not raw_json:
         logger.error(f"[EXTRACTOR] LLM falhou para {empresa} {trimestre}T{ano}")
         return None
