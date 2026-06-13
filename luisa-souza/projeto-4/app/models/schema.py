@@ -86,6 +86,15 @@ class PreviaPeriodo(BaseModel):
         None, description="VSO/VSV — Velocidade de Vendas sobre Oferta em % (ex: 18.5 para 18,5%)"
     )
 
+    # ── Evidências (rastreabilidade anti-alucinação) ─────────────────────────
+    evidencias: Optional[dict] = Field(
+        None,
+        description=(
+            "Trechos exatos do documento de onde cada valor foi extraído. "
+            "Ex: {'lancamentos_vgv_milhoes': 'VGV (R$ milhões) | TOTAL INCORPORACAO | 2.915'}"
+        )
+    )
+
     # ── Metadados de Linhagem ────────────────────────────────────────────────
     fonte_url: str = Field(..., description="URL pública do PDF na Central de Resultados da empresa")
     pdf_hash_sha256: str = Field(..., description="SHA-256 do conteúdo binário do PDF")

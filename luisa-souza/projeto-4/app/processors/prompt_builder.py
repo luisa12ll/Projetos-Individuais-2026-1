@@ -174,6 +174,8 @@ def build_user_prompt(document_text: str, empresa: str, ano: int, trimestre: int
 ---
 
 Extraia as métricas operacionais deste documento e retorne o JSON conforme o schema especificado.
+Inclua também o campo "evidencias" com o trecho exato do documento de onde cada valor foi extraído.
+Exemplo de evidencias: lancamentos_vgv_milhoes -> "VGV (R$ milhoes) | TOTAL INCORPORACAO | 2.915"
 Lembre-se: valores ausentes → null. Nunca invente dados.
 ATENÇÃO 1: Se a tabela tiver múltiplas linhas (ex: MRV, Sensia, Total Incorporação; ou Direcional, Riva, Total),
 extraia SEMPRE os valores da linha TOTAL ou TOTAL INCORPORAÇÃO, nunca de linhas individuais.
