@@ -15,6 +15,7 @@ import logging
 import tempfile
 from datetime import datetime
 from pathlib import Path
+import json
 from typing import Optional, List
 
 import httpx
@@ -66,6 +67,7 @@ def _orm_to_response(orm: PreviaORM) -> ConjunturaResponse:
         data_extracao=orm.data_extracao,
         llm_model_usado=orm.llm_model_usado,
         confianca_extracao=orm.confianca_extracao,
+        evidencias=json.loads(orm.evidencias) if orm.evidencias else None,
     )
 
 

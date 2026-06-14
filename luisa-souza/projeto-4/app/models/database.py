@@ -68,6 +68,9 @@ class PreviaORM(Base):
     # Velocidade de Vendas
     vsv_percentual = Column(Float, nullable=True)
 
+    # Evidências (rastreabilidade anti-alucinação, armazenado como JSON serializado)
+    evidencias = Column(Text, nullable=True)
+
     # Linhagem
     fonte_url = Column(Text, nullable=False)
     pdf_hash_sha256 = Column(String(64), nullable=False)

@@ -49,6 +49,7 @@ class ConjunturaResponse(BaseModel):
     data_extracao: datetime
     llm_model_usado: Optional[str] = None
     confianca_extracao: Optional[str] = None
+    evidencias: Optional[dict] = None
 
     class Config:
         from_attributes = True

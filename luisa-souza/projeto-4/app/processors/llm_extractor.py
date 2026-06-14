@@ -151,6 +151,7 @@ def _persist_previa(previa: PreviaPeriodo) -> bool:
         with Session(engine) as session:
             orm = PreviaORM(
                 empresa=previa.empresa, ano=previa.ano, trimestre=previa.trimestre,
+                evidencias=json.dumps(previa.evidencias, ensure_ascii=False) if previa.evidencias else None,
                 lancamentos_unidades=previa.lancamentos_unidades,
                 lancamentos_vgv_milhoes=previa.lancamentos_vgv_milhoes,
                 vendas_liquidas_unidades=previa.vendas_liquidas_unidades,
